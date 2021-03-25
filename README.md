@@ -1,4 +1,6 @@
-obot Vision
+Video Captioning Based on Both Egocentric and Exocentric Views of Robot Vision for Human-Robot Interaction
+---
+
 Robot vision data can be thought of as first-person videos.
 ![alt tag](https://github.com/KangSooHan/GAI/images/gai.png)
 There are three possible situations in one egocentric video.
