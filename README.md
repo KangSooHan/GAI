@@ -3,7 +3,6 @@ Video Captioning Based on Both Egocentric and Exocentric Views of Robot Vision f
 
 Robot vision data can be thought of as first-person videos.
 
-![alt tag](https://github.com/KangSooHan/GAI/blob/master/images/Figure.png)
 There are three possible situations in one egocentric video.
   1. Global
     - The global explains the overall situation including detailed information such as place, light,weather
@@ -13,6 +12,8 @@ There are three possible situations in one egocentric video.
     - The interaction explains the interacting situation or behavior between the subject, i.e. me,and others
 
 Global Action Interaction(GAI)
+
+![alt tag](https://github.com/KangSooHan/GAI/blob/master/images/Figure.png)
 
 ## Environment
   - Python3.6
