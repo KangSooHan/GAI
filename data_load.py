@@ -2,6 +2,7 @@ from utils import *
 import tensorflow as tf
 import pandas as pd
 import numpy as np
+import random
 
 def data_preprocess(df, wordtoix, n_g, n_a, n_i, types):
     G = df["Global"].values
@@ -140,7 +141,7 @@ def preProBuildWordVocab(datas, types, word_count_threshold=5):
 
 
 def get_video_data(video_data_path, video_feat_path, train_ratio=0.8, valid_ratio=0.1):
-    video_data = pd.read_csv(video_data_path, sep=',')
+    video_data = pd.read_csv(video_data_path, sep='^')
     video_data['video_path'] = video_data.apply(lambda row: row['Video']+'-{:06d}'.format(int(row['Vid_num'])) + '_' + row['Type'] +'.npy', axis=1)
     video_data['video_path'] = video_data['video_path'].map(lambda x: os.path.join(video_feat_path, x))
     video_data = video_data[video_data['video_path'].map(lambda x: os.path.exists( x ))]
@@ -173,6 +174,9 @@ def get_video_data(video_data_path, video_feat_path, train_ratio=0.8, valid_rati
     train_len = int(len(unique_filenames)*train_ratio)
     valid_len = int(len(unique_filenames)*(train_ratio+valid_ratio))
 
+    random.seed(448)
+    random.shuffle(unique_filenames)
+
     train_vids = unique_filenames[:train_len]
     valid_vids = unique_filenames[train_len:valid_len]
     test_vids = unique_filenames[valid_len:]
@@ -187,18 +191,17 @@ def get_video_data(video_data_path, video_feat_path, train_ratio=0.8, valid_rati
 def generator_fn(vid_path, cap, cap_ind):
     for vp, captions, y in zip(vid_path, cap, cap_ind):
         decoder_input, y = y[:-1], y[1:]
-
         x =  np.load(vp)
         x_seqlen, y_seqlen = len(x), len(y)
-        yield (x, x_seqlen), (decoder_input, y, y_seqlen, captions)
+        yield (x, x_seqlen, vp), (decoder_input, y, y_seqlen, captions)
 
 
 def input_fn(datas, wordtoix, batch_size, shuffle=False, len=80):
-    shapes = (([None, 4096], ()),
+    shapes = (([None, 4096], (), ()),
               ([None], [None], (), ()))
-    types = ((tf.float32, tf.int32),
+    types = ((tf.float32, tf.int32, tf.string),
              (tf.int32, tf.int32, tf.int32, tf.string))
-    paddings = ((0.0, 0),
+    paddings = ((0.0, 0, ''),
                 (0, 0, 0, ''))
 
     vid_path = datas['video_path'].values.tolist()
@@ -218,7 +221,7 @@ def input_fn(datas, wordtoix, batch_size, shuffle=False, len=80):
         args=(vid_path, cap, cap_ind))
 
     if shuffle: # for training
-        dataset = dataset.shuffle(128*batch_size)
+        dataset = dataset.shuffle(5*batch_size)
 
     dataset = dataset.repeat()  # iterate forever
     dataset = dataset.padded_batch(batch_size, shapes, paddings).prefetch(1)
@@ -238,4 +241,4 @@ def get_batch(caption_path, video_path, n_v, n_g, n_a, n_i, batch_size, types, s
         batches = input_fn(valid_datas, wordtoix, batch_size, shuffle=shuffle, len=n_g+n_a+n_i)
         num_batches = calc_num_batches(len(valid_datas), batch_size)
 
-    return batches, num_batches, len(train_datas), wordtoix, ixtoword 
+    return batches, num_batches, len(train_datas), wordtoix, ixtoword, valid_datas

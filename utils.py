@@ -6,6 +6,8 @@ import tensorflow as tf
 
 import logging
 
+import gc
+
 logging.basicConfig(level=logging.INFO)
 
 def convert_idx_to_token_tensor(inputs, idx2token):
@@ -52,30 +54,6 @@ def calc_len(hp):
 
     return hp.n_video, caplen
 
-def calculate_bleu(df,video_name, ggs, gas, gis, cap):
-
-    bleu_global = 0
-    bleu_action = 0
-    bleu_interaction = 0
-    for vn, gg, ga, gi, ca in zip(video_name, ggs, gas, gis, cap):
-        ref = df[df['video_path']==vn]
-
-        refg = ref.drop_duplicates(['Global'], keep='first')
-        refa = ref.drop_duplicates(['Action'], keep='first')
-        refi = ref.drop_duplicates(['Interaction'], keep='first')
-        ref_global = refg['Global'].values.tolist()
-        ref_action = refa['Action'].values.tolist()
-        ref_interaction = refi['Interaction'].values.tolist()
-
-
-        bleu_global += nltk.translate.bleu_score.sentence_bleu(ref_global, gg)
-        bleu_action += nltk.translate.bleu_score.sentence_bleu(ref_action, ga)
-        bleu_interaction += nltk.translate.bleu_score.sentence_bleu(ref_interaction, gi)
-
-        #print(cap)
-
-    return bleu_global/len(ggs), bleu_action/len(ggs), bleu_interaction/len(ggs)
-
 def save_variable_specs(fpath):
     '''Saves information about variables such as
     their name, shape, and total parameter number
@@ -107,7 +85,7 @@ def save_variable_specs(fpath):
     logging.info("Variables info has been saved.")
 
 
-def get_hypotheses(num_batches, num_samples, sess, tensor, dict):
+def get_hypotheses(num_batches, num_samples, sess, tensor,dict):
     '''Gets hypotheses.
     num_batches: scalar.
     num_samples: scalar.
@@ -122,8 +100,70 @@ def get_hypotheses(num_batches, num_samples, sess, tensor, dict):
     for _ in range(num_batches):
         h = sess.run(tensor)
         hypotheses.extend(h.tolist())
-    #hypotheses = postprocess(hypotheses, dict)
+    _hypotheses, ggs, gas, gis = postprocess(hypotheses, dict)
 
-    return hypotheses[:num_samples]
+    return _hypotheses, ggs[:num_samples], gas[:num_samples], gis[:num_samples]
 
 
+
+
+def postprocess(hypotheses, idx2token):
+    '''Processes translation outputs.
+    hypotheses: list of encoded predictions
+    idx2token: dictionary
+
+    Returns
+    processed hypotheses
+    '''
+    _hypotheses = []
+    ggs = []
+    gas = []
+    gis = []
+    for h in hypotheses:
+        sent = np.array([idx2token[idx] for idx in h])
+        punc_gb=np.argmax(sent=='<gbos>')
+        punc_ge =np.argmax(sent=='<geos>')+1
+        punc_ab =np.argmax(sent=='<abos>')
+        punc_ae =np.argmax(sent=='<aeos>')+1
+        punc_ib =np.argmax(sent=='<ibos>')
+        punc_ie =np.argmax(sent=='<ieos>')+1
+
+        gg = sent[punc_gb:punc_ge]
+        ga = sent[punc_ab:punc_ae]
+        gi = sent[punc_ib:punc_ie]
+
+        gg = ' '.join(gg)
+        ga = ' '.join(ga)
+        gi = ' '.join(gi)
+
+        ggs.append(gg)
+        gas.append(ga)
+        gis.append(gi)
+        _hypotheses.append(gg+ga+gi)
+    return _hypotheses, ggs, gas, gis
+
+def calculate_bleu(df, vp, ggs, gas, gis):
+    bleu_global = 0
+    bleu_action = 0
+    bleu_interaction = 0
+    for vn, gg, ga, gi in zip(vp, ggs, gas, gis):
+        ref = df[df['video_path']==vn.decode('utf-8')]
+
+        refg = ref.drop_duplicates(['Global'], keep='first')
+        refa = ref.drop_duplicates(['Action'], keep='first')
+        refi = ref.drop_duplicates(['Interaction'], keep='first')
+        ref_global = refg['Global'].values.tolist()
+        ref_action = refa['Action'].values.tolist()
+        ref_interaction = refi['Interaction'].values.tolist()
+
+        bleu_global += nltk.translate.bleu_score.sentence_bleu(ref_global, gg)
+        bleu_action += nltk.translate.bleu_score.sentence_bleu(ref_action, ga)
+        bleu_interaction += nltk.translate.bleu_score.sentence_bleu(ref_interaction, gi)
+
+        del refg
+        del refa
+        del refi
+
+        gc.collect()
+
+    return bleu_global/len(ggs), bleu_action/len(gas), bleu_interaction/len(gis)
