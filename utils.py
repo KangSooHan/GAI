@@ -2,6 +2,9 @@ import json
 import os
 import numpy as np
 import nltk
+
+nltk.download('wordnet')
+
 import tensorflow as tf
 
 import logging
@@ -85,7 +88,7 @@ def save_variable_specs(fpath):
     logging.info("Variables info has been saved.")
 
 
-def get_hypotheses(num_batches, num_samples, sess, tensor,dict):
+def get_hypotheses(num_batches, sess, tensor,vp,dict):
     '''Gets hypotheses.
     num_batches: scalar.
     num_samples: scalar.
@@ -97,14 +100,15 @@ def get_hypotheses(num_batches, num_samples, sess, tensor,dict):
     hypotheses: list of sents
     '''
     hypotheses = []
+    vps = []
     for _ in range(num_batches):
         h = sess.run(tensor)
+        v = sess.run(vp)
+        vps.extend(v.tolist())
         hypotheses.extend(h.tolist())
     _hypotheses, ggs, gas, gis = postprocess(hypotheses, dict)
 
-    return _hypotheses, ggs[:num_samples], gas[:num_samples], gis[:num_samples]
-
-
+    return _hypotheses, vps, ggs, gas, gis
 
 
 def postprocess(hypotheses, idx2token):
@@ -120,13 +124,19 @@ def postprocess(hypotheses, idx2token):
     gas = []
     gis = []
     for h in hypotheses:
-        sent = np.array([idx2token[idx] for idx in h])
-        punc_gb=np.argmax(sent=='<gbos>')
-        punc_ge =np.argmax(sent=='<geos>')+1
-        punc_ab =np.argmax(sent=='<abos>')
-        punc_ae =np.argmax(sent=='<aeos>')+1
-        punc_ib =np.argmax(sent=='<ibos>')
-        punc_ie =np.argmax(sent=='<ieos>')+1
+        sent = []
+        for idx in h:
+            if idx >= len(idx2token):
+                idx=7
+            sent.append(idx2token[idx])
+
+        sent = np.array(sent)
+        punc_gb=np.argmax(sent=='<gbos>')+1
+        punc_ge =np.argmax(sent=='<geos>')
+        punc_ab =np.argmax(sent=='<abos>')+1
+        punc_ae =np.argmax(sent=='<aeos>')
+        punc_ib =np.argmax(sent=='<ibos>')+1
+        punc_ie =np.argmax(sent=='<ieos>')
 
         gg = sent[punc_gb:punc_ge]
         ga = sent[punc_ab:punc_ae]
@@ -139,14 +149,28 @@ def postprocess(hypotheses, idx2token):
         ggs.append(gg)
         gas.append(ga)
         gis.append(gi)
-        _hypotheses.append(gg+ga+gi)
+        _hypotheses.append(gg+"\t"+ga+"\t"+gi)
     return _hypotheses, ggs, gas, gis
 
 def calculate_bleu(df, vp, ggs, gas, gis):
     bleu_global = 0
     bleu_action = 0
     bleu_interaction = 0
+
+
+    dvp = []
+    dgis = []
+    dgas = []
+    dggs = []
     for vn, gg, ga, gi in zip(vp, ggs, gas, gis):
+        if vn not in dvp:
+            dvp.append(vn)
+            dggs.append(gg)
+            dgas.append(ga)
+            dgis.append(gi)
+
+
+    for vn, gg, ga, gi in zip(dvp, dggs, dgas, dgis):
         ref = df[df['video_path']==vn.decode('utf-8')]
 
         refg = ref.drop_duplicates(['Global'], keep='first')
@@ -166,4 +190,48 @@ def calculate_bleu(df, vp, ggs, gas, gis):
 
         gc.collect()
 
-    return bleu_global/len(ggs), bleu_action/len(gas), bleu_interaction/len(gis)
+    return bleu_global/len(dggs), bleu_action/len(dgas), bleu_interaction/len(dgis)
+
+def calculate_types(df, vp, gis):
+    dvp = []
+    dgis = []
+    for vn, gi in zip(vp, gis):
+        if vn not in dvp:
+            dvp.append(vn)
+            dgis.append(gi)
+
+    y_hat = []
+    y = []
+    for vn, gi in zip(dvp, dgis):
+        ref = df[df['video_path']==vn.decode('utf-8')]
+        refi = ref.drop_duplicates(['video_path'], keep='first')
+        ref_interaction = refi['Interaction'].values
+
+        if ref_interaction=="<NONE>":
+            y.append(1)
+        else:
+            y.append(0)
+
+        if gi=="<none>":
+            y_hat.append(1)
+        else:
+            y_hat.append(0)
+    return y, y_hat
+
+
+
+def load_hparams(hp):
+    '''Loads hparams and overrides parser
+    parser: argsparse parser
+    path: directory or file where hparams are saved
+    '''
+
+    path = os.path.join(hp.save_dir, hp.log_dir)
+    if not os.path.isdir(path):
+        path = os.path.dirname(path)
+    d = open(os.path.join(path, "hparams"), 'r').read()
+    flag2val = json.loads(d)
+    for f, v in flag2val.items():
+        hp.f = v
+
+

@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 #/usr/bin/python3
 '''
@@ -54,10 +53,10 @@ def get_token_embeddings(vocab_size, num_units, zero_pad=True):
                                     embeddings[1:, :]), 0)
     return embeddings
 
-def scaled_dot_product_attention(Q, Q1, K, V, key_masks,
+def scaled_dot_product_attention(Q, K, V, key_masks,
                                  causality=False, dropout_rate=0.,
                                  training=True,
-                                 scope="scaled_dot_product_attention", att_enc=None):
+                                 scope="scaled_dot_product_attention"):
     '''See 3.2.1.
     Q: Packed queries. 3d tensor. [N, T_q, d_k].
     K: Packed keys. 3d tensor. [N, T_k, d_k].
@@ -70,9 +69,6 @@ def scaled_dot_product_attention(Q, Q1, K, V, key_masks,
     '''
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         d_k = Q.get_shape().as_list()[-1]
-
-        Q = tf.layers.dense(Q, 2*d_k, use_bias=True) # (N, T_q, d_model)
-        K = tf.layers.dense(K, 2*d_k, use_bias=True) # (N, T_k, d_model)
 
         # dot product
         outputs = tf.matmul(Q, tf.transpose(K, [0, 2, 1]))  # (N, T_q, T_k)
@@ -88,9 +84,7 @@ def scaled_dot_product_attention(Q, Q1, K, V, key_masks,
             outputs = mask(outputs, type="future")
 
         # softmax
-
         outputs = tf.nn.softmax(outputs)
-
         attention = tf.transpose(outputs, [0, 2, 1])
         tf.summary.image("attention", tf.expand_dims(attention[:1], -1))
 
@@ -104,7 +98,6 @@ def scaled_dot_product_attention(Q, Q1, K, V, key_masks,
         outputs = tf.matmul(outputs, V)  # (N, T_q, d_v)
 
     return outputs
-
 
 def mask(inputs, key_masks=None, type=None):
     """Masks paddings on keys or queries to inputs
@@ -161,7 +154,7 @@ def multihead_attention(queries, keys, values, key_masks,
                         dropout_rate=0,
                         training=True,
                         causality=False,
-                        scope="multihead_attention", att_enc=None):
+                        scope="multihead_attention"):
     '''Applies multihead attention. See 3.2.2
     queries: A 3d tensor with shape of [N, T_q, d_model].
     keys: A 3d tensor with shape of [N, T_k, d_model].
@@ -180,23 +173,17 @@ def multihead_attention(queries, keys, values, key_masks,
     T_q = queries.get_shape().as_list()[1]
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         # Linear projections
-
-        Q=queries
-        K=keys
-        #Q = tf.layers.dense(queries, d_model, use_bias=True) # (N, T_q, d_model)
-        #K = tf.layers.dense(keys, d_model, use_bias=True) # (N, T_k, d_model)
-        #Q1 = tf.layers.dense(queries, d_model, use_bias=True) # (N, T_q, d_model)
-        Q1 = queries
+        Q = tf.layers.dense(queries, d_model, use_bias=True) # (N, T_q, d_model)
+        K = tf.layers.dense(keys, d_model, use_bias=True) # (N, T_k, d_model)
         V = tf.layers.dense(values, d_model, use_bias=True) # (N, T_k, d_model)
 
         # Split and concat
         Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0) # (h*N, T_q, d_model/h)
-        Q1_ = tf.concat(tf.split(Q1, num_heads, axis=2), axis=0) # (h*N, T_q, d_model/h)
         K_ = tf.concat(tf.split(K, num_heads, axis=2), axis=0) # (h*N, T_k, d_model/h)
         V_ = tf.concat(tf.split(V, num_heads, axis=2), axis=0) # (h*N, T_k, d_model/h)
 
         # Attention
-        outputs = scaled_dot_product_attention(Q_, Q1_, K_, V_, key_masks, causality, dropout_rate, training, att_enc=att_enc)
+        outputs = scaled_dot_product_attention(Q_, K_, V_, key_masks, causality, dropout_rate, training)
 
         # Restore shape
         outputs = tf.concat(tf.split(outputs, num_heads, axis=0), axis=2 ) # (N, T_q, d_model)
@@ -228,19 +215,19 @@ def ff(inputs, num_units, scope="positionwise_feedforward"):
 
         # Residual connection
         outputs += inputs
-        
+
         # Normalize
         outputs = ln(outputs)
-    
+
     return outputs
 
 def label_smoothing(inputs, epsilon=0.1):
     '''Applies label smoothing. See 5.4 and https://arxiv.org/abs/1512.00567.
     inputs: 3d tensor. [N, T, V], where V is the number of vocabulary.
     epsilon: Smoothing rate.
-    
+
     For example,
-    
+
     ```
     import tensorflow as tf
     inputs = tf.convert_to_tensor([[[0, 0, 1], 

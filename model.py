@@ -26,7 +26,7 @@ class Transformer:
         self.hp = hp
         self.token2idx, self.idx2token = word2idx, idx2word
         self.d_model = hp.d_model
-        self.embeddings = get_token_embeddings(896, self.hp.d_model, zero_pad=True)
+        self.embeddings = get_token_embeddings(self.hp.word, self.hp.d_model, zero_pad=True)
 
     def encode(self, xs, training=True):
         '''
@@ -138,7 +138,7 @@ class Transformer:
         logits, preds, y, sents2 = self.decode(ys, memory, src_masks)
 
         # train scheme
-        y_ = label_smoothing(tf.one_hot(y, depth=896))
+        y_ = label_smoothing(tf.one_hot(y, depth=self.hp.word))
         ce = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=y_)
         nonpadding = tf.to_float(tf.not_equal(y, self.token2idx["<pad>"]))  # 0: <pad>
         loss = tf.reduce_sum(ce * nonpadding) / (tf.reduce_sum(nonpadding) + 1e-7)
@@ -185,7 +185,7 @@ class S2S():
         self.hp = hp
         self.token2idx, self.idx2token = word2idx, idx2word
         self.d_model = hp.d_model
-        self.embeddings = get_token_embeddings(896, self.hp.d_model, zero_pad=True)
+        self.embeddings = get_token_embeddings(self.hp.word, self.hp.d_model, zero_pad=True)
 
         if hp.lstm_type=='bi':
             self.lstmb = tf.nn.rnn_cell.BasicLSTMCell(hp.d_model, state_is_tuple=True)
@@ -205,10 +205,11 @@ class S2S():
                     lstmb =  tf.nn.rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1.0)
                 lstm1 = tf.nn.rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1.0)
                 lstm2 = tf.nn.rnn_cell.DropoutWrapper(self.lstm2,output_keep_prob=1.0)
-            vid_pad = tf.zeros([self.hp.batch_size, self.hp.n_video, self.hp.d_model])
             x, seqlens, video_path = xs
 
             enc= tf.layers.dense(x, self.d_model)
+
+            vid_pad = tf.zeros_like(enc)
             src_masks = tf.sequence_mask(seqlens)
 
             with tf.variable_scope("encoding_vid", reuse=tf.AUTO_REUSE) as scope:
@@ -220,6 +221,9 @@ class S2S():
 
             with tf.variable_scope("encoding_cap", reuse=tf.AUTO_REUSE) as scope:
                 output2, state2 = tf.nn.dynamic_rnn(lstm2, tf.concat([vid_pad, output1],2), sequence_length=seqlens, dtype=tf.float32)
+
+            self.state1 = state1
+            self.state2 = state2
 
         memory = output2
         return memory, src_masks
@@ -245,19 +249,16 @@ class S2S():
             # embedding
             dec = tf.nn.embedding_lookup(self.embeddings, decoder_inputs)  # (N, T2, d_model)
 
-            if step!=-1:
-                cap_pad = tf.zeros([self.hp.batch_size, step+1, self.hp.d_model])
-            else:
-                cap_pad = tf.zeros([self.hp.batch_size, 69, self.hp.d_model])
+            cap_pad = tf.zeros_like(dec)
             with tf.variable_scope("decoding_vid", reuse=tf.AUTO_REUSE) as scope:
                 if self.hp.lstm_type=='bi':
-                    output1, state1 = tf.nn.bidirectional_dynamic_rnn(lstm1, lstmb, cap_pad, sequence_length=seqlens, dtype=tf.float32)
+                    output1, state1 = tf.nn.bidirectional_dynamic_rnn(lstm1, lstmb, cap_pad, sequence_length=seqlens,initial_state_fw = self.state1[0], initial_state_bw = self.state1[1], dtype=tf.float32)
                     output1 = tf.concat(output1, 2)
                 else:
-                    output1, state1 = tf.nn.dynamic_rnn(self.lstm1, cap_pad, sequence_length=seqlens, dtype=tf.float32)
+                    output1, state1 = tf.nn.dynamic_rnn(self.lstm1, cap_pad, sequence_length=seqlens,initial_state=self.state1, dtype=tf.float32)
 
             with tf.variable_scope("decoding_cap", reuse=tf.AUTO_REUSE) as scope:
-                output2, state2 = tf.nn.dynamic_rnn(self.lstm2, tf.concat([dec,output1], 2), sequence_length=seqlens, dtype=tf.float32)
+                output2, state2 = tf.nn.dynamic_rnn(self.lstm2, tf.concat([dec,output1], 2), sequence_length=seqlens,initial_state=self.state2, dtype=tf.float32)
 
         # Final linear projection (embedding weights are shared)
         weights = tf.transpose(self.embeddings) # (d_model, vocab_size)
@@ -279,7 +280,7 @@ class S2S():
         logits, preds, y, sents2 = self.decode(ys, memory, src_masks)
 
         # train scheme
-        y_ = label_smoothing(tf.one_hot(y, depth=896))
+        y_ = label_smoothing(tf.one_hot(y, depth=self.hp.word))
         ce = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=y_)
         nonpadding = tf.to_float(tf.not_equal(y, self.token2idx["<pad>"]))  # 0: <pad>
         loss = tf.reduce_sum(ce * nonpadding) / (tf.reduce_sum(nonpadding) + 1e-7)
@@ -326,7 +327,7 @@ class S2T():
         self.hp = hp
         self.token2idx, self.idx2token = word2idx, idx2word
         self.d_model = hp.d_model
-        self.embeddings = get_token_embeddings(896, self.hp.d_model, zero_pad=True)
+        self.embeddings = get_token_embeddings(self.hp.word, self.hp.d_model, zero_pad=True)
 
         self.lstm1 = tf.nn.rnn_cell.BasicLSTMCell(hp.d_model, state_is_tuple=True)
         self.lstm2 = tf.nn.rnn_cell.BasicLSTMCell(hp.d_model, state_is_tuple=True)
@@ -358,9 +359,6 @@ class S2T():
                     output1 = tf.concat(output1, 2)
                 else:
                     output1, state1 = tf.nn.dynamic_rnn(lstm1, enc, sequence_length=seqlens, dtype=tf.float32)
-
-            with tf.variable_scope("encoding_cap", reuse=tf.AUTO_REUSE) as scope:
-                output2, state2 = tf.nn.dynamic_rnn(lstm2, tf.concat([vid_pad, output1],2), sequence_length=seqlens, dtype=tf.float32)
 
         memory = output1
         return memory, src_masks
@@ -437,7 +435,7 @@ class S2T():
         logits, preds, y, sents2 = self.decode(ys, memory, src_masks)
 
         # train scheme
-        y_ = label_smoothing(tf.one_hot(y, depth=896))
+        y_ = label_smoothing(tf.one_hot(y, depth=self.hp.word))
         ce = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=y_)
         nonpadding = tf.to_float(tf.not_equal(y, self.token2idx["<pad>"]))  # 0: <pad>
         loss = tf.reduce_sum(ce * nonpadding) / (tf.reduce_sum(nonpadding) + 1e-7)
