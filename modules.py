@@ -217,7 +217,7 @@ def ff(inputs, num_units, scope="positionwise_feedforward"):
         outputs += inputs
 
         # Normalize
-        outputs = ln(outputs)
+        #outputs = ln(outputs)
 
     return outputs
 

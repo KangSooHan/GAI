@@ -39,7 +39,6 @@ class Transformer:
             # src_masks
 
             # embedding
-
             enc= tf.layers.dense(x, self.d_model)
             #src_masks = tf.math.equal(mask, 0) # (N, T1)
             src_masks = tf.sequence_mask(seqlens)
@@ -47,8 +46,9 @@ class Transformer:
             #enc = tf.nn.embedding_lookup(self.embeddings, x) # (N, T1, d_model)
             #enc *= self.hp.d_model**0.5 # scale
 
-            enc += positional_encoding(enc, 80)
-            enc = tf.layers.dropout(enc, self.hp.dropout_rate, training=training)
+            enc  /= self.hp.d_model ** 0.5
+
+            enc += positional_encoding(enc, self.hp.n_video)
 
             ## Blocks
             for i in range(self.hp.num_blocks):
@@ -88,8 +88,7 @@ class Transformer:
             dec = tf.nn.embedding_lookup(self.embeddings, decoder_inputs)  # (N, T2, d_model)
             dec *= self.hp.d_model ** 0.5  # scale
 
-            dec += positional_encoding(dec, 80)
-            dec = tf.layers.dropout(dec, self.hp.dropout_rate, training=training)
+            dec += positional_encoding(dec, self.hp.caption)
 
             # Blocks
             for i in range(self.hp.num_blocks):
@@ -170,7 +169,7 @@ class Transformer:
         memory, src_masks = self.encode(xs, False)
 
         logging.info("Inference graph is being built. Please be patient.")
-        for _ in tqdm(range(70)):
+        for _ in tqdm(range(self.hp.caption)):
             logits, y_hat, y, sents2 = self.decode(ys, memory, src_masks, False)
             if tf.reduce_sum(y_hat, 1) == self.token2idx["<pad>"]: break
 
@@ -312,7 +311,7 @@ class S2S():
         memory, src_masks = self.encode(xs, False)
 
         logging.info("Inference graph is being built. Please be patient.")
-        for step in tqdm(range(80)):
+        for step in tqdm(range(self.hp.caption)):
             logits, y_hat, y, sents2 = self.decode(ys, memory, src_masks, False, step)
             if tf.reduce_sum(y_hat, 1) == self.token2idx["<pad>"]: break
 
@@ -347,10 +346,11 @@ class S2T():
                     lstmb =  tf.nn.rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1.0)
                 lstm1 = tf.nn.rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1.0)
                 lstm2 = tf.nn.rnn_cell.DropoutWrapper(self.lstm2,output_keep_prob=1.0)
-            vid_pad = tf.zeros([self.hp.batch_size, self.hp.n_video, self.hp.d_model])
             x, seqlens, video_path = xs
 
             enc= tf.layers.dense(x, self.d_model)
+
+            vid_pad = tf.zeros_like(enc)
             src_masks = tf.sequence_mask(seqlens)
 
             with tf.variable_scope("encoding_vid", reuse=tf.AUTO_REUSE) as scope:
@@ -360,7 +360,9 @@ class S2T():
                 else:
                     output1, state1 = tf.nn.dynamic_rnn(lstm1, enc, sequence_length=seqlens, dtype=tf.float32)
 
-        memory = output1
+            output2, state2 = tf.nn.dynamic_rnn(lstm2, output1, sequence_length=seqlens, dtype=tf.float32)
+
+        memory = output2
         return memory, src_masks
 
 
@@ -385,7 +387,7 @@ class S2T():
             dec = tf.nn.embedding_lookup(self.embeddings, decoder_inputs)  # (N, T2, d_model)
             dec *= self.hp.d_model ** 0.5  # scale
 
-            dec += positional_encoding(dec, 80)
+            dec += positional_encoding(dec, self.hp.caption)
             dec = tf.layers.dropout(dec, self.hp.dropout_rate, training=training)
 
             # Blocks
@@ -467,7 +469,7 @@ class S2T():
         memory, src_masks = self.encode(xs, False)
 
         logging.info("Inference graph is being built. Please be patient.")
-        for _ in tqdm(range(80)):
+        for _ in tqdm(range(self.hp.caption)):
             logits, y_hat, y, sents2 = self.decode(ys, memory, src_masks, False)
             if tf.reduce_sum(y_hat, 1) == self.token2idx["<pad>"]: break
 

@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import random
 
-def data_preprocess(df, wordtoix, n_g, n_a, n_i, types):
+def data_preprocess(df, wordtoix, n_g, n_a, n_i,hp):
     G = df["Global"].values
     G = list(map(lambda x:'<gbos> ' + x, G))
     A = df["Action"].values
@@ -42,13 +42,13 @@ def data_preprocess(df, wordtoix, n_g, n_a, n_i, types):
             I[idx] = new_word + ' <ieos>'
 
         cap = '<start> '
-        if 'G' in types:
+        if 'G' in hp.types:
             cap = cap + G[idx]
 
-        if 'A' in types:
+        if 'A' in hp.types:
             cap = cap + A[idx]
 
-        if 'I' in types:
+        if 'I' in hp.types:
             cap = cap + I[idx]
 
         captions.append(cap)
@@ -69,15 +69,15 @@ def data_preprocess(df, wordtoix, n_g, n_a, n_i, types):
 
     return df
 
-def preProBuildWordVocab(datas, types, word_count_threshold=5):
+def preProBuildWordVocab(datas, hp, word_count_threshold=5):
     train_Global, train_Action, train_Interaction = datas['Global'].values,  datas['Action'].values, datas['Interaction'].values
 
     captions_list = []
-    if 'G' in types:
+    if 'G' in hp.types:
         captions_list.extend(list(train_Global))
-    if 'A' in types:
+    if 'A' in hp.types:
         captions_list.extend(list(train_Action))
-    if 'I' in types:
+    if 'I' in hp.types:
         captions_list.extend(list(train_Interaction))
     captions = np.array(captions_list, dtype=np.object)
 
@@ -133,9 +133,9 @@ def preProBuildWordVocab(datas, types, word_count_threshold=5):
     bias_init_vector = np.log(bias_init_vector)
     bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
 
-    np.save("wordtoix"+types, wordtoix)
-    np.save("ixtoword"+types, ixtoword)
-    np.save("bias_init_vector"+types, bias_init_vector)
+    np.save(os.path.join(hp.save_dir, "wordtoix"+hp.types), wordtoix)
+    np.save(os.path.join(hp.save_dir, "ixtoword"+hp.types), ixtoword)
+    np.save(os.path.join(hp.save_dir, "bias_init_vector"+hp.types), bias_init_vector)
 
     return wordtoix, ixtoword, bias_init_vector
 
@@ -174,7 +174,7 @@ def get_video_data(video_data_path, video_feat_path, train_ratio=0.8, valid_rati
     train_len = int(len(unique_filenames)*train_ratio)
     valid_len = int(len(unique_filenames)*(train_ratio+valid_ratio))
 
-    random.seed(448)
+    random.seed(3125)
     random.shuffle(unique_filenames)
 
     train_vids = unique_filenames[:train_len]
@@ -205,9 +205,6 @@ def input_fn(datas, wordtoix, batch_size, shuffle=False, len=80):
                 (0, 0, 0, ''))
 
     vid_path = datas['video_path'].values.tolist()
-
-    #vid = list(map(lambda x: np.load(x), vid_path))
-    vid_path = datas['video_path'].values.tolist()
     cap = datas['captions'].values.tolist()
     cap_ind = datas['captions_ind'].values.tolist()
 
@@ -228,17 +225,30 @@ def input_fn(datas, wordtoix, batch_size, shuffle=False, len=80):
 
     return dataset
 
-def get_batch(caption_path, video_path, n_v, n_g, n_a, n_i, batch_size, types, shuffle=False, dataset="train"):
-    train_datas, valid_datas, _ = get_video_data(caption_path, video_path)
-    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(train_datas,types, word_count_threshold=0)
-    train_datas = data_preprocess(train_datas, wordtoix, n_g, n_a, n_i, types)
-    valid_datas = data_preprocess(valid_datas, wordtoix, n_g, n_a, n_i, types)
+def get_batch(caption_path, video_path, n_v, n_g, n_a, n_i, batch_size, hp, shuffle=False, dataset="train"):
+    train_datas, valid_datas, test_datas = get_video_data(caption_path, video_path)
+
+    df = pd.concat([train_datas, valid_datas, test_datas])
+    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(df,hp, word_count_threshold=0)
+    del df
+    train_datas = data_preprocess(train_datas, wordtoix, n_g, n_a, n_i,hp)
+    valid_datas = data_preprocess(valid_datas, wordtoix, n_g, n_a, n_i,hp)
+    test_datas = data_preprocess(test_datas, wordtoix, n_g, n_a, n_i,hp)
 
     if dataset=="train":
-        batches = input_fn(train_datas, wordtoix, batch_size, shuffle=shuffle, len=n_g+n_a+n_i)
+        batches = input_fn(train_datas, wordtoix, batch_size, shuffle=True, len=n_g+n_a+n_i)
         num_batches = calc_num_batches(len(train_datas), batch_size)
-    elif dataset=="valid":
-        batches = input_fn(valid_datas, wordtoix, batch_size, shuffle=shuffle, len=n_g+n_a+n_i)
-        num_batches = calc_num_batches(len(valid_datas), batch_size)
 
-    return batches, num_batches, len(train_datas), wordtoix, ixtoword, valid_datas
+        return batches, num_batches, wordtoix, ixtoword, train_datas
+
+    elif dataset=="valid":
+        batches = input_fn(valid_datas, wordtoix, len(valid_datas), shuffle=False, len=n_g+n_a+n_i)
+        num_batches = calc_num_batches(len(valid_datas), len(valid_datas))
+
+        return batches, num_batches, wordtoix, ixtoword, valid_datas
+
+    elif dataset=='test':
+        batches = input_fn(test_datas, wordtoix, len(test_datas), shuffle=False, len=n_g+n_a+n_i)
+        num_batches = calc_num_batches(len(test_datas), len(test_datas))
+
+        return batches, num_batches, wordtoix, ixtoword, test_datas
